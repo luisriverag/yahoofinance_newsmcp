@@ -1,0 +1,35 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "yahoofinance-newsmcp"
+version = "0.1.0"
+description = "Yahoo Finance news digests (per-article, per-company, overall) as a library and MCP server, with an optional morning scheduler and Telegram delivery."
+readme = "README.md"
+requires-python = ">=3.10"
+license = { text = "MIT" }
+dependencies = [
+    "httpx>=0.27",
+    "beautifulsoup4>=4.12",
+    "python-dotenv>=1.0",
+    "mcp>=2.0.0,<3",
+    "uvicorn>=0.30",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=8.0",
+    "pytest-asyncio>=0.23",
+]
+
+[project.scripts]
+yahoofinance-newsmcp = "yahoofinance_newsmcp.cli:main"
+yahoofinance-newsmcp-server = "yahoofinance_newsmcp.server:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+asyncio_mode = "auto"
