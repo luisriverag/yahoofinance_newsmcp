@@ -140,15 +140,28 @@ def test_tool_wrapper_converts_expected_errors():
 # --- transport selection, mirroring the sibling byte-for-byte shape ---
 
 
-def test_main_defaults_to_stdio(monkeypatch):
+def test_main_defaults_to_http(monkeypatch):
     monkeypatch.delenv("YF_MCP_TRANSPORT", raising=False)
+    monkeypatch.delenv("YF_MCP_HTTP_PORT", raising=False)
+    monkeypatch.delenv("YF_MCP_AUTH_TOKEN", raising=False)
 
-    calls = []
-    monkeypatch.setattr(server.mcp, "run", lambda: calls.append("stdio"))
+    sentinel_app = object()
+    monkeypatch.setattr(server.mcp, "streamable_http_app", lambda **kwargs: sentinel_app)
+
+    captured = {}
+
+    def fake_uvicorn_run(app, *, host, port, log_level):
+        captured["app"] = app
+        captured["port"] = port
+
+    import uvicorn
+
+    monkeypatch.setattr(uvicorn, "run", fake_uvicorn_run)
 
     server.main()
 
-    assert calls == ["stdio"]
+    assert captured["app"] is sentinel_app
+    assert captured["port"] == 3654
 
 
 def test_main_stdio_explicit(monkeypatch):

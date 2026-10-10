@@ -6,10 +6,10 @@ services:
     env_file:
       - .env
     ports:
-      # Host:container. Change the host side if 8080 is taken, or bind to a
-      # specific interface (e.g. "192.168.1.16:8080:8080") to keep this off a
+      # Host:container. Change the host side if 3654 is taken, or bind to a
+      # specific interface (e.g. "192.168.1.16:3654:3654") to keep this off a
       # public interface -- see README.md's auth note either way.
-      - "8080:8080"
+      - "3654:3654"
     volumes:
       # Persist the generated digests. This must match DIGEST_STATE_DIR in
       # .env (container-side path).

@@ -1,11 +1,11 @@
 """MCP server exposing morning Yahoo Finance news digests as tools.
 
-Run with ``yahoofinance-newsmcp-server``. Defaults to stdio transport (a client
-spawns this as a subprocess and drives it directly) for local/single-host use;
-set ``YF_MCP_TRANSPORT=http`` to instead serve MCP over Streamable HTTP as an
-always-on service — the way to reach this server from a client running on a
-different host or container, and the only mode in which the built-in morning
-scheduler runs. See this project's README for both modes.
+Run with ``yahoofinance-newsmcp-server``. Defaults to Streamable HTTP transport
+on port 3654 (an always-on service) — the way to reach this server from a
+client running on a different host or container, and the only mode in which the
+built-in morning scheduler runs. Set ``YF_MCP_TRANSPORT=stdio`` for a client to
+spawn this as a subprocess and drive it directly over stdio. See this project's
+README for both modes.
 """
 
 from __future__ import annotations
@@ -282,9 +282,9 @@ def run_morning_digest_safe(settings: Settings):
 def main() -> None:
     settings = get_settings()
     configure_logging(settings)
-    transport = os.getenv("YF_MCP_TRANSPORT", "stdio").strip().lower()
+    transport = os.getenv("YF_MCP_TRANSPORT", "http").strip().lower()
 
-    if transport in ("", "stdio"):
+    if transport == "stdio":
         if settings.digest_scheduler_enabled:
             print(
                 "WARNING: DIGEST_SCHEDULER_ENABLED=true has no effect in stdio "
@@ -296,15 +296,15 @@ def main() -> None:
         mcp.run()
         return
 
-    if transport not in ("http", "streamable-http"):
-        raise ValueError(f"Unknown YF_MCP_TRANSPORT={transport!r}; expected 'stdio' or 'http'.")
+    if transport not in ("", "http", "streamable-http"):
+        raise ValueError(f"Unknown YF_MCP_TRANSPORT={transport!r}; expected 'http' or 'stdio'.")
 
     import uvicorn
 
     from .scheduler import MorningScheduler
 
     host = os.getenv("YF_MCP_HTTP_HOST", "0.0.0.0")
-    port = int(os.getenv("YF_MCP_HTTP_PORT", "8080"))
+    port = int(os.getenv("YF_MCP_HTTP_PORT", "3654"))
     path = os.getenv("YF_MCP_HTTP_PATH", "/mcp")
     token = os.getenv("YF_MCP_AUTH_TOKEN", "").strip()
 

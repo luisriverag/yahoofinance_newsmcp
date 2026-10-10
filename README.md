@@ -50,7 +50,8 @@ See [`.env.sample`](./.env.sample) for all variables. Key ones:
 - `LLM_OVERALL_*`, `DIGEST_TONE`: optional separate backend/tone for the overall summary
 - `TELEGRAM_BOT_TOKEN`, `TELEGRAM_CHAT_ID`: for delivery
 - `DIGEST_SCHEDULER_ENABLED`, `DIGEST_TIME`, `DIGEST_TIMEZONE`: for automatic runs
-- `YF_MCP_TRANSPORT`: `stdio` (default) or `http`
+- `YF_MCP_TRANSPORT`: `http` (default) or `stdio`
+- `YF_MCP_HTTP_HOST`, `YF_MCP_HTTP_PORT` (default `3654`), `YF_MCP_HTTP_PATH`: HTTP bind
 - `YF_MCP_AUTH_TOKEN`: required for HTTP in untrusted networks
 
 ## Docker
@@ -62,14 +63,23 @@ docker compose up -d --build
 ```
 
 ## MCP integration with ocabra_telegram
-This server is designed to be wired into [ocabra_telegram](https://github.com/luisriverag/ocabra_telegram) as an MCP backend (Streamable HTTP). Configure:
+This server is designed to be wired into [ocabra_telegram](https://github.com/luisriverag/ocabra_telegram) as an MCP backend. By default it serves MCP over Streamable HTTP on port **3654** (`/mcp`), which is the recommended path for a client on another host/container:
+
+```env
+# In ocabra_telegram's .env
+YF_MCP_HTTP_PORT=3654
+MCP_YAHOO_NEWS_URL=http://<host>:3654/mcp
+MCP_YAHOO_NEWS_AUTH_TOKEN=<same value as YF_MCP_AUTH_TOKEN>
+```
+
+For a same-host stdio install (no HTTP service), set `YF_MCP_TRANSPORT=stdio` here and configure ocabra_telegram's generic stdio backend:
 ```env
 EXTRA_MCP_SERVERS=yahoo_news
 MCP_YAHOO_NEWS_ENABLED=true
-MCP_YAHOO_NEWS_COMMAND=yahoofinance-newsmcp-server  # or ssh bridge
-# For HTTP backend, use the generic Streamable HTTP pattern in ocabra_telegram
+MCP_YAHOO_NEWS_COMMAND=yahoofinance-newsmcp-server  # add YF_MCP_TRANSPORT=stdio to its env
 ```
-Or run this server as HTTP (`YF_MCP_TRANSPORT=http`) and add a small HTTP MCP backend module in ocabra_telegram following `homebox_tools.py`/`torrent_tools.py` conventions (Streamable HTTP, admin allowlist). See ocabra_telegram's `docs/SPEC.md` and `generic_mcp_tools.py` for the stdio path; for HTTP, mirror the existing HTTP backends.
+
+See ocabra_telegram's README for the full branch-and-pull-request workflow and the HTTP backend conventions (`homebox_tools.py`/`torrent_tools.py`).
 
 ## Development
 ```bash
