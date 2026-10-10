@@ -1,7 +1,7 @@
 # Roadmap
 
 ## Near-term improvements
-- [ ] Add tests around the scheduler's behavior under different timezones (America/New_York, Europe/London, Asia/Tokyo) to catch DST edge cases.
+- [x] Add tests around the scheduler's behavior under different timezones (America/New_York, Europe/London, Asia/Tokyo) to catch DST edge cases.
 - [ ] Tighten article body extraction to avoid noisy boilerplate (ads, cookie banners, "read more", social embeds). Consider adding simple heuristics or configurable selectors.
 - [ ] Add optional company name mapping in config (e.g. `COMPANY_NAMES={"AAPL": "Apple Inc."}`) for nicer digest titles and overall summaries.
 - [ ] Add integration tests for the Telegram chunking edge case (exactly at 4000-char boundaries) and RSS with dateless items.
