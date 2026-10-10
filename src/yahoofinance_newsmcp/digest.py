@@ -18,6 +18,7 @@ from dataclasses import asdict, dataclass, field
 from datetime import datetime, timezone
 from typing import List, Optional, Sequence
 
+from .cache import JsonCache, build_cache
 from .config import Settings, get_settings
 from .summarize import summarize_articles, summarize_company, summarize_overall
 from .yahoo import NewsArticle, YahooFinanceClient
@@ -82,8 +83,16 @@ def generate_digest(
     llm_overall=None,
     tickers: Optional[Sequence[str]] = None,
     now: Optional[datetime] = None,
+    summary_cache: Optional[JsonCache] = None,
 ) -> MorningDigest:
-    """Fetch and summarize news for every configured ticker into one digest."""
+    """Fetch and summarize news for every configured ticker into one digest.
+
+    ``summary_cache`` (defaulting to the CACHE_DIR/DIGEST_STATE_DIR-backed
+    cache for these settings) lets a repeat call against an unchanged ticker
+    skip the summarization model entirely for articles/companies it already
+    summarized recently -- the dominant cost of a digest run, especially
+    against a local/single-request backend.
+    """
 
     settings = settings or get_settings()
     tickers = list(tickers) if tickers is not None else settings.resolved_tickers()
@@ -105,6 +114,8 @@ def generate_digest(
 
         overall_config = settings.overall_llm_config()
         llm_overall = LlmClient(settings, **overall_config) if overall_config else llm
+    owns_summary_cache = summary_cache is None
+    summary_cache = summary_cache or build_cache(settings, "summaries")
 
     now = now or datetime.now(timezone.utc)
     companies: List[CompanyDigest] = []
@@ -123,8 +134,8 @@ def generate_digest(
                 )
                 continue
 
-            summaries = summarize_articles(llm, ticker, articles, name)
-            company_summary = summarize_company(llm, ticker, articles, name)
+            summaries = summarize_articles(llm, ticker, articles, name, summary_cache)
+            company_summary = summarize_company(llm, ticker, articles, name, summary_cache)
             article_digests = [
                 _article_digest(article, summaries[index] if index < len(summaries) else "")
                 for index, article in enumerate(articles)
@@ -150,6 +161,8 @@ def generate_digest(
             llm.close()
         if owns_yahoo:
             yahoo.close()
+        if owns_summary_cache:
+            summary_cache.save()
 
     return MorningDigest(
         generated_at=now.isoformat(),

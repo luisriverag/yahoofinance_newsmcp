@@ -6,6 +6,7 @@ A Yahoo Finance morning news digest service: fetch recent headlines per ticker, 
 - Config-driven watchlist (`WATCHLIST_TICKERS` or `WATCHLIST_FILE`) covering any Yahoo Finance symbols.
 - Fetches from Yahoo Finance search API with RSS fallback.
 - Optional full-article body extraction for richer summaries, with per-run body caching and ETag revalidation.
+- Persistent disk cache (article bodies and LLM summaries) across separate calls, not just within one run -- a repeat `generate_digest`/`summarize_ticker` call within `CACHE_TTL_HOURS` skips re-fetching and re-summarizing unchanged articles entirely.
 - Server-side LLM summarization (per-article, per-company, overall) using any OpenAI-compatible `/v1/chat/completions` endpoint; an optional separate backend/tone can run the overall summary.
 - Clean Markdown rendering; JSON output available for automation.
 - Persistence: writes `latest.md`, `latest.json`, and dated files to `DIGEST_STATE_DIR`.
@@ -50,6 +51,7 @@ See [`.env.sample`](./.env.sample) for all variables. Key ones:
 - `LLM_OVERALL_*`, `DIGEST_TONE`: optional separate backend/tone for the overall summary
 - `TELEGRAM_BOT_TOKEN`, `TELEGRAM_CHAT_ID`: for delivery
 - `DIGEST_SCHEDULER_ENABLED`, `DIGEST_TIME`, `DIGEST_TIMEZONE`: for automatic runs
+- `CACHE_DIR` (defaults to `DIGEST_STATE_DIR`), `CACHE_TTL_HOURS` (default 24): persistent cache for fetched article bodies and LLM summaries, so a repeat call within the TTL skips re-fetching/re-summarizing unchanged articles; leave both empty to disable caching
 - `YF_MCP_TRANSPORT`: `http` (default) or `stdio`
 - `YF_MCP_HTTP_HOST`, `YF_MCP_HTTP_PORT` (default `3654`), `YF_MCP_HTTP_PATH`: HTTP bind
 - `YF_MCP_AUTH_TOKEN`: required for HTTP in untrusted networks

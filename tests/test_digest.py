@@ -1,5 +1,6 @@
 import pytest
 
+from yahoofinance_newsmcp.cache import JsonCache
 from yahoofinance_newsmcp.config import Settings
 from yahoofinance_newsmcp.digest import (
     DigestError,
@@ -106,6 +107,38 @@ def test_generate_digest_applies_tone_to_overall():
         tickers=["AAPL"],
     )
     assert any("brisk and plain-spoken" in call for call in overall.calls)
+
+
+def test_generate_digest_reuses_summary_cache_across_calls(tmp_path):
+    """A second generate_digest call against the same unchanged watchlist
+    should skip the summarization model entirely (both per-article and
+    per-company calls), the whole point of passing a persistent cache."""
+
+    settings = Settings(watchlist_tickers=["AAPL"], news_fetch_article_text=False)
+    llm = RecordingLLM('["s1", "s2"]')
+    cache = JsonCache(str(tmp_path / "summaries.json"), ttl_seconds=3600)
+
+    generate_digest(
+        settings,
+        yahoo=FakeYahoo(_articles()),
+        llm=llm,
+        llm_overall=RecordingLLM("Overall."),
+        tickers=["AAPL"],
+        summary_cache=cache,
+    )
+    calls_after_first_run = len(llm.calls)
+    assert calls_after_first_run > 0
+
+    generate_digest(
+        settings,
+        yahoo=FakeYahoo(_articles()),
+        llm=llm,
+        llm_overall=RecordingLLM("Overall."),
+        tickers=["AAPL"],
+        summary_cache=cache,
+    )
+
+    assert len(llm.calls) == calls_after_first_run
 
 
 def test_generate_digest_handles_ticker_with_no_news():

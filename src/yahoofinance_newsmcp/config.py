@@ -152,6 +152,9 @@ class Settings:
     digest_timezone: str = "UTC"
     digest_state_dir: str = ""
 
+    cache_dir: str = ""
+    cache_ttl_hours: float = 24.0
+
     http_timeout_seconds: float = 30.0
     log_level: str = "INFO"
 
@@ -234,6 +237,8 @@ def get_settings() -> Settings:
         digest_time=_clean(os.getenv("DIGEST_TIME")) or "07:00",
         digest_timezone=_clean(os.getenv("DIGEST_TIMEZONE")) or "UTC",
         digest_state_dir=_clean(os.getenv("DIGEST_STATE_DIR")),
+        cache_dir=_clean(os.getenv("CACHE_DIR")) or _clean(os.getenv("DIGEST_STATE_DIR")),
+        cache_ttl_hours=_float_env("CACHE_TTL_HOURS", 24.0),
         http_timeout_seconds=_float_env("HTTP_TIMEOUT_SECONDS", 30.0),
         log_level=_log_level_env("LOG_LEVEL", "INFO"),
     )

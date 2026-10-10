@@ -25,6 +25,7 @@ from xml.etree import ElementTree
 import httpx
 from bs4 import BeautifulSoup
 
+from .cache import JsonCache, build_cache
 from .config import Settings, get_settings
 
 logger = logging.getLogger("yahoofinance-newsmcp.yahoo")
@@ -336,6 +337,8 @@ class YahooFinanceClient:
         self,
         settings: Optional[Settings] = None,
         http_client: Optional[httpx.Client] = None,
+        *,
+        body_cache: Optional[JsonCache] = None,
     ) -> None:
         self._settings = settings or get_settings()
         self._client = http_client or httpx.Client(
@@ -349,8 +352,16 @@ class YahooFinanceClient:
         # on a 304.
         self._body_cache: Dict[str, str] = {}
         self._etags: Dict[str, str] = {}
+        # Cross-run memo, keyed by URL: a body already fetched on a previous
+        # call (possibly a previous process) is reused without hitting the
+        # publisher's site again. Falls back to an inert no-op cache when the
+        # caller doesn't pass one (e.g. CACHE_DIR/DIGEST_STATE_DIR unset).
+        self._persistent_body_cache = body_cache if body_cache is not None else build_cache(
+            self._settings, "article_bodies"
+        )
 
     def close(self) -> None:
+        self._persistent_body_cache.save()
         if self._owns_client:
             self._client.close()
 
@@ -446,7 +457,12 @@ class YahooFinanceClient:
 
         Bodies are memoized per URL for the life of this client (i.e. one
         digest run), so a repeated call — a retry, or the same link seen under
-        two tickers — never refetches. Pass ``refresh=True`` to revalidate
+        two tickers — never refetches. They're also checked against the
+        cross-run persistent cache (CACHE_DIR/DIGEST_STATE_DIR) before any
+        network request, so a separate call shortly after — a second
+        generate_digest, or summarize_ticker on an already-covered ticker —
+        reuses the body fetched last time instead of hitting the publisher's
+        site again. Pass ``refresh=True`` to bypass both caches and revalidate
         instead: if an ETag was seen, the request is conditional and a ``304
         Not Modified`` reuses the cached body.
         """
@@ -457,6 +473,13 @@ class YahooFinanceClient:
         cached = self._body_cache.get(url)
         if cached is not None and not refresh:
             return cached
+
+        if not refresh:
+            persisted = self._persistent_body_cache.get(f"body:{url}")
+            if persisted is not None:
+                body = persisted.get("body", "")
+                self._body_cache[url] = body
+                return body
 
         etag = self._etags.get(url)
         headers = {"If-None-Match": etag} if (refresh and etag) else None
@@ -477,6 +500,7 @@ class YahooFinanceClient:
 
         body = parse_article_text(response.text)
         self._body_cache[url] = body
+        self._persistent_body_cache.set(f"body:{url}", {"body": body})
         new_etag = response.headers.get("etag")
         if new_etag:
             self._etags[url] = new_etag.strip('"')
