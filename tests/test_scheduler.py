@@ -1,5 +1,4 @@
 import threading
-import time
 from datetime import datetime, timedelta, timezone
 
 import pytest
@@ -81,4 +80,42 @@ def test_scheduler_run_once_runs_now_and_survives_errors():
         raise RuntimeError("expected")
 
     scheduler = MorningScheduler("07:00", "UTC", boom)
-    scheduler.run_once()  # must not raise
+    scheduler.run_once()
+
+
+def test_scheduler_next_run_handles_dst_transitions():
+    try:
+        from zoneinfo import ZoneInfo
+
+        tz = ZoneInfo("America/New_York")
+    except Exception:
+        pytest.skip("zoneinfo not available")
+
+    summer = datetime(2026, 7, 1, 12, 0, tzinfo=tz)
+    nxt = next_run_after(summer, parse_hhmm("07:00"))
+    assert nxt.tzinfo == tz
+    assert nxt.hour == 7
+
+    winter = datetime(2026, 12, 1, 12, 0, tzinfo=tz)
+    nxt2 = next_run_after(winter, parse_hhmm("07:00"))
+    assert nxt2.tzinfo == tz
+    assert nxt2.hour == 7
+
+
+@pytest.mark.parametrize(
+    "tzname",
+    ["America/New_York", "Europe/London", "Asia/Tokyo"],
+)
+def test_scheduler_next_run_different_timezones(tzname):
+    try:
+        from zoneinfo import ZoneInfo
+
+        tz = ZoneInfo(tzname)
+    except Exception:
+        pytest.skip("zoneinfo not available")
+
+    now = datetime(2026, 1, 1, 18, 0, tzinfo=tz)
+    nxt = next_run_after(now, parse_hhmm("07:00"))
+    assert nxt.tzinfo == tz
+    assert nxt.hour == 7
+    assert nxt.date() == (now.date() + timedelta(days=1))
