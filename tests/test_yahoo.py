@@ -102,6 +102,68 @@ def test_parse_article_text_extracts_paragraphs():
     assert "Short." not in body
 
 
+def test_parse_article_text_drops_ad_and_sponsor_chrome():
+    html = (
+        "<html><body><article>"
+        '<div class="ad-container"><p>Buy this product now, it is truly amazing and cheap.</p></div>'
+        '<div class="sponsored-content"><p>Sponsored story that should not show up in the body.</p></div>'
+        "<p>A genuine paragraph that is long enough to be kept in the extracted body.</p>"
+        "</article></body></html>"
+    )
+    body = parse_article_text(html)
+    assert "A genuine paragraph" in body
+    assert "Buy this product" not in body
+    assert "Sponsored story" not in body
+
+
+def test_parse_article_text_drops_boilerplate_paragraphs():
+    html = (
+        "<html><body><article>"
+        "<p>Read more: the full story continues on our website after this point.</p>"
+        "<p>Subscribe to our newsletter for daily updates delivered to your inbox.</p>"
+        "<p>Actual reporting content that is clearly long enough to be kept here.</p>"
+        "</article></body></html>"
+    )
+    body = parse_article_text(html)
+    assert "Actual reporting content" in body
+    assert "Read more" not in body
+    assert "Subscribe to our newsletter" not in body
+
+
+def test_parse_article_text_keeps_word_containing_ad():
+    html = (
+        "<html><body><article>"
+        "<p>The newly adapted strategy was rolled out across the whole company.</p>"
+        "</article></body></html>"
+    )
+    body = parse_article_text(html)
+    assert "newly adapted strategy" in body
+
+
+def test_parse_article_text_keeps_hyphenated_component():
+    html = (
+        "<html><body><article>"
+        '<div class="market-share"><p>Our market share grew enough to be a real paragraph here.</p></div>'
+        '<div class="commentary"><p>Expert commentary that is long enough to be kept in the body.</p></div>'
+        "</article></body></html>"
+    )
+    body = parse_article_text(html)
+    assert "market share grew" in body
+    assert "Expert commentary" in body
+
+
+def test_parse_article_text_prefers_main_container():
+    html = (
+        "<html><body>"
+        '<div id="sidebar"><p>Sidebar text that is long enough but should be removed entirely.</p></div>'
+        "<main><p>Main content paragraph long enough to be considered real article text.</p></main>"
+        "</body></html>"
+    )
+    body = parse_article_text(html)
+    assert "Main content paragraph" in body
+    assert "Sidebar text" not in body
+
+
 def test_filter_recent_keeps_recent_and_dateless():
     old = _article("old", NOW - timedelta(hours=48))
     fresh = _article("fresh", NOW - timedelta(hours=2))
@@ -183,3 +245,64 @@ class TestClient:
             client = YahooFinanceClient(Settings(), http_client=http)
             with pytest.raises(YahooError):
                 client.fetch_news("  ")
+
+    def test_fetch_article_text_memoizes_per_url(self):
+        calls = {"n": 0}
+
+        def handler(request):
+            calls["n"] += 1
+            return httpx.Response(
+                200,
+                text="<html><body><article><p>Body text that is long enough to be kept here in full.</p></article></body></html>",
+                headers={"ETag": "v1"},
+            )
+
+        with httpx.Client(transport=httpx.MockTransport(handler)) as http:
+            client = YahooFinanceClient(Settings(), http_client=http)
+            article = _article("t", NOW)
+            first = client.fetch_article_text(article)
+            second = client.fetch_article_text(article)
+        assert "Body text" in first
+        assert second == first
+        assert calls["n"] == 1
+
+    def test_fetch_article_text_uses_etag_and_handles_304(self):
+        seen = []
+
+        def handler(request):
+            seen.append(request.headers.get("if-none-match"))
+            if request.headers.get("if-none-match"):
+                return httpx.Response(304)
+            return httpx.Response(
+                200,
+                text="<html><body><article><p>Cached body text that is long enough to survive here.</p></article></body></html>",
+                headers={"ETag": "abc"},
+            )
+
+        with httpx.Client(transport=httpx.MockTransport(handler)) as http:
+            client = YahooFinanceClient(Settings(), http_client=http)
+            article = _article("t", NOW)
+            first = client.fetch_article_text(article)
+            second = client.fetch_article_text(article, refresh=True)
+        assert "Cached body text" in first
+        assert second == first
+        assert seen[0] is None
+        assert seen[1] == "abc"
+
+    def test_fetch_article_text_returns_cached_on_error(self):
+        state = {"fail": False}
+
+        def handler(request):
+            if state["fail"]:
+                raise httpx.ConnectError("boom")
+            return httpx.Response(
+                200,
+                text="<html><body><article><p>Good body text that is long enough to keep here in full.</p></article></body></html>",
+            )
+
+        with httpx.Client(transport=httpx.MockTransport(handler)) as http:
+            client = YahooFinanceClient(Settings(), http_client=http)
+            article = _article("t", NOW)
+            good = client.fetch_article_text(article)
+            state["fail"] = True
+            assert client.fetch_article_text(article, refresh=True) == good

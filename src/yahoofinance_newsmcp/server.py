@@ -123,17 +123,24 @@ def summarize_ticker(ticker: str, limit: Optional[int] = None) -> dict:
     """
 
     settings = get_settings()
+    name = settings.company_name_for(ticker)
     with YahooFinanceClient(settings) as client:
         articles = client.enrich(client.fetch_news(ticker, limit=limit))
     if not articles:
-        return {"ticker": ticker.upper(), "overall_summary": "No recent news.", "articles": []}
+        return {
+            "ticker": ticker.upper(),
+            "name": name,
+            "overall_summary": "No recent news.",
+            "articles": [],
+        }
 
     with LlmClient(settings) as llm:
-        summaries = summarize_articles(llm, ticker, articles)
-        overall = summarize_company(llm, ticker, articles)
+        summaries = summarize_articles(llm, ticker, articles, name)
+        overall = summarize_company(llm, ticker, articles, name)
 
     return {
         "ticker": ticker.upper(),
+        "name": name,
         "overall_summary": overall,
         "articles": [
             {
@@ -212,6 +219,7 @@ def _digest_dict(digest) -> dict:
         "companies": [
             {
                 "ticker": company.ticker,
+                "name": company.name or company.ticker,
                 "article_count": company.article_count,
                 "overall_summary": company.overall_summary,
                 "articles": [

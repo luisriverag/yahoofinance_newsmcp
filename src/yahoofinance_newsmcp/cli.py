@@ -37,10 +37,68 @@ def _build_parser() -> argparse.ArgumentParser:
         help="Restrict the digest to specific ticker(s); repeatable. Defaults to the watchlist.",
     )
 
+    fetch = sub.add_parser(
+        "fetch",
+        help="Fetch recent headlines without calling the LLM (fast dry run / smoke test).",
+    )
+    fetch.add_argument(
+        "--ticker",
+        action="append",
+        default=None,
+        help="Restrict the fetch to specific ticker(s); repeatable. Defaults to the watchlist.",
+    )
+    fetch.add_argument("--json", action="store_true", help="Print the headlines as JSON.")
+
     sub.add_parser("list-watchlist", help="Print the configured tickers.")
     sub.add_parser("check-health", help="Run the consolidated health checks.")
 
     return parser
+
+
+def _run_fetch(settings, args) -> int:
+    """Fetch-only dry run: print recent headlines without the LLM."""
+
+    from .yahoo import YahooFinanceClient
+
+    tickers = args.ticker or settings.resolved_tickers()
+    if not tickers:
+        print("No tickers configured (WATCHLIST_TICKERS/WATCHLIST_FILE).", file=sys.stderr)
+        return 1
+
+    rows = []
+    with YahooFinanceClient(settings) as client:
+        for ticker in tickers:
+            articles = client.enrich(client.fetch_news(ticker))
+            for article in articles:
+                rows.append(
+                    {
+                        "ticker": ticker,
+                        "title": article.title,
+                        "link": article.link,
+                        "publisher": article.publisher,
+                        "published_at": article.published_at.isoformat()
+                        if article.published_at
+                        else None,
+                        "body": article.body,
+                    }
+                )
+
+    if args.json:
+        import json
+
+        print(json.dumps(rows, indent=2, ensure_ascii=False))
+        return 0
+
+    for row in rows:
+        print(f"{row['ticker']}: {row['title']}")
+        print(f"    {row['publisher'] or 'unknown source'}, "
+              f"{row['published_at'] or 'time unknown'}")
+        if row["body"]:
+            print(f"    body: {row['body'][:200]}{'...' if len(row['body']) > 200 else ''}")
+        print(f"    {row['link']}")
+    if not rows:
+        print("No recent news for the requested ticker(s).")
+    return 0
 
 
 def main(argv: Optional[List[str]] = None) -> int:
@@ -59,6 +117,9 @@ def main(argv: Optional[List[str]] = None) -> int:
         for check in report.checks:
             print(f"[{'OK' if check.ok else 'FAIL'}] {check.name}: {check.detail}")
         return 0 if report.healthy else 1
+
+    if args.command == "fetch":
+        return _run_fetch(settings, args)
 
     if args.command == "generate":
         tickers = args.ticker or None

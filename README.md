@@ -5,15 +5,15 @@ A Yahoo Finance morning news digest service: fetch recent headlines per ticker, 
 ## Features
 - Config-driven watchlist (`WATCHLIST_TICKERS` or `WATCHLIST_FILE`) covering any Yahoo Finance symbols.
 - Fetches from Yahoo Finance search API with RSS fallback.
-- Optional full-article body extraction for richer summaries.
-- Server-side LLM summarization (per-article, per-company, overall) using any OpenAI-compatible `/v1/chat/completions` endpoint.
+- Optional full-article body extraction for richer summaries, with per-run body caching and ETag revalidation.
+- Server-side LLM summarization (per-article, per-company, overall) using any OpenAI-compatible `/v1/chat/completions` endpoint; an optional separate backend/tone can run the overall summary.
 - Clean Markdown rendering; JSON output available for automation.
 - Persistence: writes `latest.md`, `latest.json`, and dated files to `DIGEST_STATE_DIR`.
-- Telegram delivery with automatic message chunking.
+- Telegram delivery with automatic message chunking; token verified via `getMe` in health checks.
 - MCP server with tools: `list_watchlist`, `fetch_news`, `summarize_ticker`, `generate_digest`, `send_digest`, `get_last_digest`, `check_health`.
 - Built-in daily scheduler (`DIGEST_SCHEDULER_ENABLED`, `DIGEST_TIME`, `DIGEST_TIMEZONE`) for always-on HTTP mode.
 - Health checks covering watchlist, LLM, Yahoo, Telegram (optional), persistence (optional).
-- CLI for one-off generation and health checks.
+- CLI for one-off generation, headline-only dry runs (`fetch`), and health checks.
 - Docker image and docker-compose sample.
 
 ## Quick start
@@ -31,6 +31,9 @@ pip install -e .
 # Generate a digest (dry-run by default if Telegram not configured)
 yahoofinance-newsmcp generate --dry-run
 
+# Fast headline-only smoke test (no LLM call)
+yahoofinance-newsmcp fetch
+
 # Or run MCP server over stdio
 yahoofinance-newsmcp-server
 ```
@@ -39,10 +42,12 @@ yahoofinance-newsmcp-server
 See [`.env.sample`](./.env.sample) for all variables. Key ones:
 - `WATCHLIST_TICKERS`: comma-separated symbols (e.g. `AAPL,MSFT,NVDA`)
 - `WATCHLIST_FILE`: optional file with one ticker per line
+- `COMPANY_NAMES`: optional ticker→display-name map (`AAPL=Apple Inc.` or JSON)
 - `NEWS_LOOKBACK_HOURS`: how far back to pull news (default 24)
 - `NEWS_PER_TICKER`: max articles per ticker (default 10)
 - `NEWS_FETCH_ARTICLE_TEXT`: fetch full article bodies (default true)
 - `LLM_CHAT_URL`, `LLM_MODEL`, `LLM_API_KEY`: OpenAI-compatible endpoint
+- `LLM_OVERALL_*`, `DIGEST_TONE`: optional separate backend/tone for the overall summary
 - `TELEGRAM_BOT_TOKEN`, `TELEGRAM_CHAT_ID`: for delivery
 - `DIGEST_SCHEDULER_ENABLED`, `DIGEST_TIME`, `DIGEST_TIMEZONE`: for automatic runs
 - `YF_MCP_TRANSPORT`: `stdio` (default) or `http`

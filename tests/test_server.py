@@ -68,9 +68,19 @@ def test_tool_summarize_ticker_empty_news(monkeypatch):
     _stub_yahoo(monkeypatch, articles=[], enriched=[])
     assert server.summarize_ticker("AAPL") == {
         "ticker": "AAPL",
+        "name": "AAPL",
         "overall_summary": "No recent news.",
         "articles": [],
     }
+
+
+def test_tool_summarize_ticker_uses_company_name(monkeypatch):
+    monkeypatch.setattr(
+        server, "get_settings", lambda: Settings(company_names={"AAPL": "Apple Inc."})
+    )
+    _stub_yahoo(monkeypatch, articles=[], enriched=[])
+    result = server.summarize_ticker("AAPL")
+    assert result["name"] == "Apple Inc."
 
 
 def test_tool_generate_digest(monkeypatch):

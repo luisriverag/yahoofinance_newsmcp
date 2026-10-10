@@ -27,6 +27,15 @@ OVERALL_PROMPT = (
 )
 
 
+def _subject(ticker: str, company_name: str = "") -> str:
+    """Reference a ticker in prompts, adding its display name when available."""
+
+    name = (company_name or "").strip()
+    if name and name.upper() != ticker.upper():
+        return f"{ticker} ({name})"
+    return ticker
+
+
 def _article_context(article: NewsArticle) -> str:
     parts = [f"Title: {article.title}"]
     if article.publisher:
@@ -40,7 +49,9 @@ def _article_context(article: NewsArticle) -> str:
     return "\n".join(parts)
 
 
-def build_article_prompt(ticker: str, articles: Sequence[NewsArticle]) -> List[Dict[str, str]]:
+def build_article_prompt(
+    ticker: str, articles: Sequence[NewsArticle], company_name: str = ""
+) -> List[Dict[str, str]]:
     """Prompt the model for one short summary per article, returned as JSON."""
 
     blocks = "\n\n".join(
@@ -52,9 +63,9 @@ def build_article_prompt(ticker: str, articles: Sequence[NewsArticle]) -> List[D
             "role": "user",
             "content": (
                 f"Summarize each of the following {len(articles)} news item(s) about "
-                f"{ticker} in one or two sentences. Return a JSON array of "
-                "strings, one summary per item, in the same order, with no extra "
-                "text.\n\n" + blocks
+                f"{_subject(ticker, company_name)} in one or two sentences. Return a "
+                "JSON array of strings, one summary per item, in the same order, "
+                "with no extra text.\n\n" + blocks
             ),
         },
     ]
@@ -111,16 +122,20 @@ def _split_summary_lines(text: str) -> List[str]:
     return lines
 
 
-def summarize_articles(llm: LlmClient, ticker: str, articles: Sequence[NewsArticle]) -> List[str]:
+def summarize_articles(
+    llm: LlmClient, ticker: str, articles: Sequence[NewsArticle], company_name: str = ""
+) -> List[str]:
     """Summarize every article for one ticker; one LLM call, ordered output."""
 
     if not articles:
         return []
-    response = llm.chat(build_article_prompt(ticker, articles))
+    response = llm.chat(build_article_prompt(ticker, articles, company_name))
     return parse_article_summaries(response, expected=len(articles))
 
 
-def build_company_prompt(ticker: str, articles: Sequence[NewsArticle]) -> List[Dict[str, str]]:
+def build_company_prompt(
+    ticker: str, articles: Sequence[NewsArticle], company_name: str = ""
+) -> List[Dict[str, str]]:
     blocks = "\n\n".join(_article_context(article) for article in articles)
     return [
         {"role": "system", "content": OVERALL_PROMPT},
@@ -128,22 +143,29 @@ def build_company_prompt(ticker: str, articles: Sequence[NewsArticle]) -> List[D
             "role": "user",
             "content": (
                 f"Write a single short paragraph (3-6 sentences) summarizing what "
-                f"today's news collectively says about {ticker}. Note the main "
-                "themes and any clearly positive or negative tone, but do not "
-                "give investment advice.\n\nNews items:\n\n" + blocks
+                f"today's news collectively says about {_subject(ticker, company_name)}. "
+                "Note the main themes and any clearly positive or negative tone, but "
+                "do not give investment advice.\n\nNews items:\n\n" + blocks
             ),
         },
     ]
 
 
-def summarize_company(llm: LlmClient, ticker: str, articles: Sequence[NewsArticle]) -> str:
+def summarize_company(
+    llm: LlmClient, ticker: str, articles: Sequence[NewsArticle], company_name: str = ""
+) -> str:
     if not articles:
         return "No recent news."
-    return llm.chat(build_company_prompt(ticker, articles)).strip()
+    return llm.chat(build_company_prompt(ticker, articles, company_name)).strip()
 
 
-def build_overall_prompt(company_summaries: Sequence[tuple[str, str]]) -> List[Dict[str, str]]:
+def build_overall_prompt(
+    company_summaries: Sequence[tuple[str, str]], tone: str = ""
+) -> List[Dict[str, str]]:
     blocks = "\n\n".join(f"{ticker}: {summary}" for ticker, summary in company_summaries)
+    tone_line = (
+        f"\n\nTone/style: {tone.strip()}." if tone.strip() else ""
+    )
     return [
         {"role": "system", "content": OVERALL_PROMPT},
         {
@@ -152,14 +174,18 @@ def build_overall_prompt(company_summaries: Sequence[tuple[str, str]]) -> List[D
                 "Below are per-company summaries of this morning's news for a "
                 "watchlist. Write one short overall paragraph (3-6 sentences) "
                 "highlighting the most important shared themes and any notable "
-                "divergences across companies. Do not give investment advice.\n\n"
+                "divergences across companies. Do not give investment advice."
+                + tone_line
+                + "\n\n"
                 + blocks
             ),
         },
     ]
 
 
-def summarize_overall(llm: LlmClient, company_summaries: Sequence[tuple[str, str]]) -> str:
+def summarize_overall(
+    llm: LlmClient, company_summaries: Sequence[tuple[str, str]], tone: str = ""
+) -> str:
     if not company_summaries:
         return "No companies were covered."
-    return llm.chat(build_overall_prompt(company_summaries)).strip()
+    return llm.chat(build_overall_prompt(company_summaries, tone)).strip()

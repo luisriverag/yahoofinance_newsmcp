@@ -50,3 +50,57 @@ def test_main_missing_command(monkeypatch, capsys):
     monkeypatch.setattr(cli, "get_settings", lambda: Settings())
     with pytest.raises(SystemExit):
         cli.main([])
+
+
+def test_main_fetch_dry_run(monkeypatch, capsys):
+    from datetime import datetime, timezone
+
+    from yahoofinance_newsmcp.config import Settings
+    from yahoofinance_newsmcp.yahoo import NewsArticle, YahooFinanceClient
+
+    monkeypatch.setattr(cli, "get_settings", lambda: Settings(watchlist_tickers=["AAPL"]))
+
+    def fake_fetch_news(self, ticker, limit=None, lookback_hours=None):
+        return [
+            NewsArticle(
+                ticker="AAPL",
+                title="Apple ships something",
+                link="https://example.com/1",
+                publisher="Reuters",
+                published_at=datetime(2026, 1, 1, tzinfo=timezone.utc),
+            )
+        ]
+
+    monkeypatch.setattr(YahooFinanceClient, "fetch_news", fake_fetch_news)
+    monkeypatch.setattr(YahooFinanceClient, "enrich", lambda self, articles: list(articles))
+
+    assert cli.main(["fetch"]) == 0
+    out = capsys.readouterr().out
+    assert "AAPL: Apple ships something" in out
+    assert "https://example.com/1" in out
+
+
+def test_main_fetch_json(monkeypatch, capsys):
+    from yahoofinance_newsmcp.config import Settings
+    from yahoofinance_newsmcp.yahoo import NewsArticle, YahooFinanceClient
+
+    monkeypatch.setattr(cli, "get_settings", lambda: Settings(watchlist_tickers=["AAPL"]))
+    monkeypatch.setattr(
+        YahooFinanceClient,
+        "fetch_news",
+        lambda self, ticker, limit=None, lookback_hours=None: [
+            NewsArticle(ticker="AAPL", title="T", link="https://example.com/1")
+        ],
+    )
+    monkeypatch.setattr(YahooFinanceClient, "enrich", lambda self, articles: list(articles))
+
+    assert cli.main(["fetch", "--json"]) == 0
+    assert '"title": "T"' in capsys.readouterr().out
+
+
+def test_main_fetch_without_tickers(monkeypatch, capsys):
+    from yahoofinance_newsmcp.config import Settings
+
+    monkeypatch.setattr(cli, "get_settings", lambda: Settings())
+    assert cli.main(["fetch"]) == 1
+    assert "No tickers configured" in capsys.readouterr().err

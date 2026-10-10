@@ -72,9 +72,27 @@ class LlmClient:
         self,
         settings: Optional[Settings] = None,
         http_client: Optional[httpx.Client] = None,
+        *,
+        chat_url: Optional[str] = None,
+        model: Optional[str] = None,
+        api_key: Optional[str] = None,
+        timeout: Optional[float] = None,
     ) -> None:
+        """OpenAI-compatible chat client.
+
+        Endpoint overrides (``chat_url``/``model``/``api_key``/``timeout``)
+        default to the matching ``LLM_*`` settings, so a second backend for
+        e.g. the overall briefing is a per-instance concern, not a global one.
+        """
+
         self._settings = settings or get_settings()
-        self._client = http_client or httpx.Client(timeout=self._settings.llm_timeout_seconds)
+        self._chat_url = chat_url if chat_url is not None else self._settings.llm_chat_url
+        self._model = model if model is not None else self._settings.llm_model
+        self._api_key = api_key if api_key is not None else self._settings.llm_api_key
+        self._timeout = (
+            timeout if timeout is not None else self._settings.llm_timeout_seconds
+        )
+        self._client = http_client or httpx.Client(timeout=self._timeout)
         self._owns_client = http_client is None
 
     def close(self) -> None:
@@ -95,13 +113,21 @@ class LlmClient:
         max_tokens: Optional[int] = None,
     ) -> str:
         settings = self._settings
-        if not settings.llm_chat_url:
-            raise LlmError("LLM_CHAT_URL is not configured")
-        if not settings.llm_model:
-            raise LlmError("LLM_MODEL is not configured")
+        if not self._chat_url:
+            raise LlmError(
+                "LLM_CHAT_URL is not configured"
+                if self._chat_url == settings.llm_chat_url
+                else "no chat URL was provided for this summarizer"
+            )
+        if not self._model:
+            raise LlmError(
+                "LLM_MODEL is not configured"
+                if self._model == settings.llm_model
+                else "no model was provided for this summarizer"
+            )
 
         body: Dict[str, Any] = {
-            "model": settings.llm_model,
+            "model": self._model,
             "messages": messages,
             "temperature": temperature,
             "stream": False,
@@ -110,11 +136,11 @@ class LlmClient:
             body["max_tokens"] = max_tokens
 
         headers = {"Content-Type": "application/json"}
-        if settings.llm_api_key:
-            headers["Authorization"] = f"Bearer {settings.llm_api_key}"
+        if self._api_key:
+            headers["Authorization"] = f"Bearer {self._api_key}"
 
         try:
-            response = self._client.post(settings.llm_chat_url, json=body, headers=headers)
+            response = self._client.post(self._chat_url, json=body, headers=headers)
             response.raise_for_status()
         except httpx.HTTPStatusError as exc:
             raise LlmError(

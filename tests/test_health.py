@@ -7,6 +7,7 @@ from yahoofinance_newsmcp.yahoo import YahooError
 
 def test_check_health_healthy(monkeypatch, tmp_path):
     monkeypatch.setattr(health.YahooFinanceClient, "probe", lambda self, ticker="AAPL": 3)
+    monkeypatch.setattr(health.TelegramClient, "get_me", lambda self: "yahoobot")
     settings = Settings(
         watchlist_tickers=["AAPL"],
         llm_chat_url="https://llm.example/v1/chat/completions",
@@ -17,6 +18,45 @@ def test_check_health_healthy(monkeypatch, tmp_path):
     )
     report = health.check_health(settings)
     assert report.healthy is True
+
+
+def test_check_health_telegram_token_invalid(monkeypatch):
+    monkeypatch.setattr(health.YahooFinanceClient, "probe", lambda self, ticker="AAPL": 1)
+
+    def bad_get_me(self):
+        from yahoofinance_newsmcp.telegram import TelegramError
+
+        raise TelegramError("Telegram rejected the bot token")
+
+    monkeypatch.setattr(health.TelegramClient, "get_me", bad_get_me)
+    settings = Settings(
+        watchlist_tickers=["AAPL"],
+        llm_chat_url="https://llm.example/v1/chat/completions",
+        llm_model="m",
+        telegram_bot_token="t",
+        telegram_chat_id="1",
+    )
+    report = health.check_health(settings)
+    assert report.healthy is True
+    telegram_check = next(check for check in report.checks if check.name == "telegram")
+    assert telegram_check.ok is False
+    assert telegram_check.required is False
+
+
+def test_check_health_telegram_token_valid_missing_chat_id(monkeypatch):
+    monkeypatch.setattr(health.YahooFinanceClient, "probe", lambda self, ticker="AAPL": 1)
+    monkeypatch.setattr(health.TelegramClient, "get_me", lambda self: "yahoobot")
+    settings = Settings(
+        watchlist_tickers=["AAPL"],
+        llm_chat_url="https://llm.example/v1/chat/completions",
+        llm_model="m",
+        telegram_bot_token="t",
+    )
+    report = health.check_health(settings)
+    assert report.healthy is True
+    telegram_check = next(check for check in report.checks if check.name == "telegram")
+    assert telegram_check.ok is False
+    assert "TELEGRAM_CHAT_ID" in telegram_check.detail
 
 
 def test_check_health_fails_without_watchlist(monkeypatch):

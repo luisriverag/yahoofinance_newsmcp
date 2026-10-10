@@ -9,11 +9,12 @@ tests).
 
 from __future__ import annotations
 
+import json
 import logging
 import os
 from dataclasses import dataclass, field
 from functools import lru_cache
-from typing import List, Optional
+from typing import Dict, List, Optional
 
 from dotenv import load_dotenv
 
@@ -81,10 +82,49 @@ def _dedupe(items) -> List[str]:
     return result
 
 
+def parse_company_names(raw: str) -> Dict[str, str]:
+    """Parse an optional ticker -> display-name map.
+
+    Accepts either a JSON object (``{"AAPL": "Apple Inc."}``) or a simple
+    comma/newline-separated list of ``TICKER=Name`` pairs. Keys are
+    upper-cased; blank entries and entries without a ``=`` are ignored. When
+    both formats are mixed, JSON is preferred only if it parses as an object.
+    """
+
+    raw = _clean(raw)
+    if not raw:
+        return {}
+
+    names: Dict[str, str] = {}
+    if raw.lstrip().startswith("{"):
+        try:
+            parsed = json.loads(raw)
+        except ValueError:
+            parsed = None
+        if isinstance(parsed, dict):
+            for key, value in parsed.items():
+                ticker = _clean(str(key)).upper()
+                name = _clean(str(value))
+                if ticker and name:
+                    names[ticker] = name
+            return names
+
+    for chunk in raw.replace("\n", ",").split(","):
+        key, sep, value = chunk.partition("=")
+        if not sep:
+            continue
+        ticker = _clean(key).upper()
+        name = _clean(value)
+        if ticker and name:
+            names[ticker] = name
+    return names
+
+
 @dataclass(frozen=True)
 class Settings:
     watchlist_tickers: List[str] = field(default_factory=list)
     watchlist_file: str = ""
+    company_names: Dict[str, str] = field(default_factory=dict)
 
     news_lookback_hours: float = 24.0
     news_per_ticker: int = 10
@@ -98,6 +138,11 @@ class Settings:
     llm_api_key: str = ""
     llm_model: str = ""
     llm_timeout_seconds: float = 120.0
+    llm_overall_chat_url: str = ""
+    llm_overall_api_key: str = ""
+    llm_overall_model: str = ""
+    llm_overall_timeout_seconds: float = 0.0
+    digest_tone: str = ""
 
     telegram_bot_token: str = ""
     telegram_chat_id: str = ""
@@ -114,6 +159,32 @@ class Settings:
         """Configured watchlist: env tickers merged with an optional file."""
 
         return _dedupe([*self.watchlist_tickers, *load_watchlist_file(self.watchlist_file)])
+
+    def company_name_for(self, ticker: str) -> str:
+        """Display name for a ticker, falling back to the ticker itself."""
+
+        return self.company_names.get((ticker or "").strip().upper()) or (ticker or "").strip()
+
+    def overall_llm_config(self) -> Dict[str, object]:
+        """Optional non-default backend for the watchlist-wide summary.
+
+        ``LLM_OVERALL_*`` lets the overall briefing run on a different
+        (typically larger/costlier) model/tone than the per-company work.
+        Returns an empty dict when no override is set; per-field, each value
+        falls back to the base ``LLM_*`` setting.
+        """
+
+        config: Dict[str, object] = {}
+        if self.llm_overall_chat_url or self.llm_overall_model or self.llm_overall_api_key:
+            config["chat_url"] = self.llm_overall_chat_url or self.llm_chat_url
+            config["model"] = self.llm_overall_model or self.llm_model
+            config["api_key"] = self.llm_overall_api_key or self.llm_api_key
+            config["timeout"] = (
+                self.llm_overall_timeout_seconds
+                if self.llm_overall_timeout_seconds > 0
+                else self.llm_timeout_seconds
+            )
+        return config
 
 
 def load_watchlist_file(path: str) -> List[str]:
@@ -136,6 +207,7 @@ def get_settings() -> Settings:
     return Settings(
         watchlist_tickers=parse_tickers(_clean(os.getenv("WATCHLIST_TICKERS"))),
         watchlist_file=_clean(os.getenv("WATCHLIST_FILE")),
+        company_names=parse_company_names(_clean(os.getenv("COMPANY_NAMES"))),
         news_lookback_hours=_float_env("NEWS_LOOKBACK_HOURS", 24.0),
         news_per_ticker=_int_env("NEWS_PER_TICKER", 10),
         news_fetch_article_text=_bool_env("NEWS_FETCH_ARTICLE_TEXT", True),
@@ -151,6 +223,11 @@ def get_settings() -> Settings:
         llm_api_key=_clean(os.getenv("LLM_API_KEY")),
         llm_model=_clean(os.getenv("LLM_MODEL")),
         llm_timeout_seconds=_float_env("LLM_TIMEOUT_SECONDS", 120.0),
+        llm_overall_chat_url=_clean(os.getenv("LLM_OVERALL_CHAT_URL")),
+        llm_overall_api_key=_clean(os.getenv("LLM_OVERALL_API_KEY")),
+        llm_overall_model=_clean(os.getenv("LLM_OVERALL_MODEL")),
+        llm_overall_timeout_seconds=_float_env("LLM_OVERALL_TIMEOUT_SECONDS", 0.0),
+        digest_tone=_clean(os.getenv("DIGEST_TONE")),
         telegram_bot_token=_clean(os.getenv("TELEGRAM_BOT_TOKEN")),
         telegram_chat_id=_clean(os.getenv("TELEGRAM_CHAT_ID")),
         digest_scheduler_enabled=_bool_env("DIGEST_SCHEDULER_ENABLED", False),

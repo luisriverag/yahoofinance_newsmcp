@@ -64,6 +64,50 @@ def test_generate_digest_end_to_end():
     assert digest.total_articles == 3
 
 
+class RecordingLLM:
+    def __init__(self, reply="Recorded."):
+        self.reply = reply
+        self.calls = []
+
+    def chat(self, messages):
+        self.calls.append(messages[-1]["content"])
+        return self.reply
+
+    def close(self):
+        pass
+
+
+def test_generate_digest_uses_injected_overall_llm():
+    settings = Settings(watchlist_tickers=["AAPL"], news_fetch_article_text=False)
+    overall = RecordingLLM("Overall via second backend.")
+    digest = generate_digest(
+        settings,
+        yahoo=FakeYahoo(_articles()),
+        llm=FakeLLM(),
+        llm_overall=overall,
+        tickers=["AAPL"],
+    )
+    assert digest.overall_summary == "Overall via second backend."
+    assert any("shared themes" in call for call in overall.calls)
+
+
+def test_generate_digest_applies_tone_to_overall():
+    settings = Settings(
+        watchlist_tickers=["AAPL"],
+        news_fetch_article_text=False,
+        digest_tone="brisk and plain-spoken",
+    )
+    overall = RecordingLLM()
+    generate_digest(
+        settings,
+        yahoo=FakeYahoo(_articles()),
+        llm=FakeLLM(),
+        llm_overall=overall,
+        tickers=["AAPL"],
+    )
+    assert any("brisk and plain-spoken" in call for call in overall.calls)
+
+
 def test_generate_digest_handles_ticker_with_no_news():
     settings = Settings(watchlist_tickers=["AAPL"], news_fetch_article_text=False)
     digest = generate_digest(settings, yahoo=FakeYahoo([]), llm=FakeLLM(), tickers=["AAPL"])
@@ -85,6 +129,41 @@ def test_render_markdown_contains_sections():
     assert "## AAPL (2 article(s))" in md
     assert "Apple news" in md
     assert "https://a/1" in md
+
+
+def test_generate_digest_includes_company_name():
+    settings = Settings(
+        watchlist_tickers=["AAPL"],
+        company_names={"AAPL": "Apple Inc."},
+        news_fetch_article_text=False,
+    )
+    digest = generate_digest(settings, yahoo=FakeYahoo(_articles()), llm=FakeLLM(), tickers=["AAPL"])
+    aapl = digest.companies[0]
+    assert aapl.name == "Apple Inc."
+    assert aapl.display_name == "Apple Inc."
+    assert "## AAPL — Apple Inc. (2 article(s))" in render_markdown(digest)
+
+
+def test_render_markdown_company_name_round_trips(tmp_path):
+    from yahoofinance_newsmcp.digest import ArticleDigest, CompanyDigest
+
+    digest = MorningDigest(
+        generated_at="2026-01-01T07:00:00+00:00",
+        lookback_hours=24,
+        overall_summary="Overall paragraph.",
+        companies=[
+            CompanyDigest(
+                ticker="AAPL",
+                name="Apple Inc.",
+                overall_summary="Company paragraph.",
+                articles=[ArticleDigest(title="Apple news", link="https://a/1")],
+            )
+        ],
+    )
+    persist_digest(digest, str(tmp_path))
+    loaded = load_latest(str(tmp_path))
+    assert loaded is not None
+    assert loaded.companies[0].name == "Apple Inc."
 
 
 def test_render_json_round_trips_via_load_latest(tmp_path):

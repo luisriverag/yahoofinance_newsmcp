@@ -69,6 +69,40 @@ class TelegramClient:
     def __exit__(self, *exc: object) -> None:
         self.close()
 
+    def get_me(self) -> str:
+        """Verify the bot token against the Bot API; returns the bot username.
+
+        Raises TelegramError when the token is missing, rejected, or the Bot
+        API is unreachable. Used by health checks to distinguish "delivery not
+        configured" from "delivery configured but broken".
+        """
+
+        if not self._settings.telegram_bot_token:
+            raise TelegramError("TELEGRAM_BOT_TOKEN is not configured")
+
+        url = f"{TELEGRAM_API_BASE}/bot{self._settings.telegram_bot_token}/getMe"
+        try:
+            response = self._client.get(url)
+        except httpx.HTTPError as exc:
+            raise TelegramError(f"Telegram getMe request failed: {exc}") from exc
+
+        if response.status_code in (401, 403):
+            raise TelegramError("Telegram rejected the bot token (HTTP {})".format(response.status_code))
+        try:
+            response.raise_for_status()
+        except httpx.HTTPStatusError as exc:
+            raise TelegramError(
+                f"Telegram getMe returned HTTP {exc.response.status_code}"
+            ) from exc
+
+        payload = response.json()
+        if not payload.get("ok"):
+            description = payload.get("description") or "unknown error"
+            raise TelegramError(f"Telegram getMe failed: {description}")
+        result = payload.get("result")
+        username = result.get("username") if isinstance(result, dict) else None
+        return username or "unknown bot"
+
     def send_message(self, text: str, chat_id: Optional[str] = None) -> List[int]:
         """Send text (auto-chunked) to a chat; returns the message ids sent."""
 

@@ -65,3 +65,32 @@ class TestChat:
             llm = LlmClient(settings, http_client=http)
             with pytest.raises(LlmError, match="HTTP 500"):
                 llm.chat([{"role": "user", "content": "q"}])
+
+    def test_chat_uses_per_instance_overrides(self):
+        captured = {}
+
+        def handler(request):
+            captured["url"] = str(request.url)
+            captured["auth"] = request.headers.get("authorization")
+            body = request.content.decode()
+            captured["body"] = body
+            return httpx.Response(200, json=_chat_payload("ok"))
+
+        settings = Settings(
+            llm_chat_url="https://base.example/v1/chat/completions",
+            llm_model="base-model",
+            llm_api_key="base-key",
+        )
+        with httpx.Client(transport=httpx.MockTransport(handler)) as http:
+            llm = LlmClient(
+                settings,
+                http_client=http,
+                chat_url="https://overall.example/v1/chat/completions",
+                model="overall-model",
+                api_key="overall-key",
+                timeout=5.0,
+            )
+            assert llm.chat([{"role": "user", "content": "q"}]) == "ok"
+        assert captured["url"] == "https://overall.example/v1/chat/completions"
+        assert captured["auth"] == "Bearer overall-key"
+        assert "overall-model" in captured["body"]

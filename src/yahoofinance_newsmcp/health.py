@@ -14,6 +14,7 @@ from dataclasses import dataclass
 from typing import List, Optional
 
 from .config import Settings, get_settings
+from .telegram import TelegramClient, TelegramError
 from .yahoo import YahooError, YahooFinanceClient
 
 __all__ = ["HealthCheckItem", "HealthCheckReport", "check_health"]
@@ -64,11 +65,32 @@ def _check_yahoo(settings: Settings) -> HealthCheckItem:
 def _check_telegram(settings: Settings) -> HealthCheckItem:
     if not settings.telegram_bot_token:
         return HealthCheckItem("telegram", True, "Not configured (optional delivery).", required=False)
-    if not settings.telegram_chat_id:
+
+    token_ok = True
+    detail = "Telegram token is configured."
+    with TelegramClient(settings) as telegram:
+        try:
+            username = telegram.get_me()
+            detail = f"Bot token valid (bot @{username})."
+        except TelegramError as exc:
+            token_ok = False
+            detail = str(exc)
+
+    if token_ok and not settings.telegram_chat_id:
         return HealthCheckItem(
-            "telegram", False, "TELEGRAM_BOT_TOKEN is set but TELEGRAM_CHAT_ID is not."
+            "telegram",
+            False,
+            "Bot token is valid but TELEGRAM_CHAT_ID is not set.",
+            required=False,
         )
-    return HealthCheckItem("telegram", True, "Token and chat id configured.", required=False)
+    if not token_ok:
+        return HealthCheckItem("telegram", False, detail, required=False)
+    return HealthCheckItem(
+        "telegram",
+        True,
+        f"{detail} Chat id configured ({settings.telegram_chat_id}).",
+        required=False,
+    )
 
 
 def _check_persistence(settings: Settings) -> HealthCheckItem:

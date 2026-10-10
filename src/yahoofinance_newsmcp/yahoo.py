@@ -19,7 +19,7 @@ import re
 from dataclasses import dataclass, replace
 from datetime import datetime, timedelta, timezone
 from email.utils import parsedate_to_datetime
-from typing import Any, Iterable, List, Optional
+from typing import Any, Dict, Iterable, List, Optional
 from xml.etree import ElementTree
 
 import httpx
@@ -142,8 +142,129 @@ def _html_to_text(html: str) -> str:
     return _WHITESPACE_RE.sub(" ", text).strip()
 
 
+_BOILERPLATE_TAGS = (
+    "script",
+    "style",
+    "noscript",
+    "header",
+    "footer",
+    "nav",
+    "aside",
+    "form",
+    "iframe",
+    "svg",
+    "button",
+)
+
+_BOILERPLATE_COMPONENTS = {
+    "ad",
+    "ads",
+    "advert",
+    "adverts",
+    "advertisement",
+    "advertising",
+    "sponsor",
+    "sponsored",
+    "sponsorship",
+    "promo",
+    "promotion",
+    "teaser",
+    "newsletter",
+    "subscribe",
+    "subscription",
+    "cookie",
+    "cookies",
+    "consent",
+    "gdpr",
+    "banner",
+    "widget",
+    "sidebar",
+    "masthead",
+    "breadcrumb",
+    "pagination",
+    "pager",
+    "nav",
+    "navigation",
+    "menu",
+    "footer",
+    "header",
+    "modal",
+    "overlay",
+    "popup",
+    "paywall",
+    "trending",
+    "social",
+    "sharethis",
+    "sharing",
+    "comments",
+    "comment",
+    "related",
+    "recirc",
+    "recommended",
+    "recommendations",
+}
+
+_COMPONENT_SPLIT_RE = re.compile(r"[^a-z0-9]+")
+
+_BOILERPLATE_PARAGRAPH_RE = re.compile(
+    r"("
+    r"read more"
+    r"|sign up"
+    r"|subscribe"
+    r"|advertisement"
+    r"|follow us"
+    r"|download the .*app"
+    r"|click here"
+    r"|we use cookies"
+    r"|accept cookies"
+    r"|all rights reserved"
+    r"|terms of (service|use)"
+    r"|privacy policy"
+    r"|cookie policy"
+    r"|share this article"
+    r"|this article (was|has been)"
+    r")",
+    re.IGNORECASE,
+)
+
+
+def _is_boilerplate_element(tag: Any) -> bool:
+    """Heuristic: does this element's class/id/marker look like page chrome?
+
+    Component matching (split on any non-alphanumeric run) means tokens like
+    ``ad``/``sponsor``/``sidebar`` are caught without false positives such as
+    ``market-share`` or ``commentary``.
+    """
+
+    values: List[str] = []
+    for attr in ("class", "id", "data-testid", "role", "aria-label"):
+        value = tag.get(attr)
+        if isinstance(value, (list, tuple)):
+            values.extend(str(part) for part in value)
+        elif value:
+            values.append(str(value))
+    haystack = " ".join(values).lower()
+    if not haystack:
+        return False
+    return any(
+        component in _BOILERPLATE_COMPONENTS
+        for component in _COMPONENT_SPLIT_RE.split(haystack)
+        if component
+    )
+
+
+def _is_boilerplate_paragraph(text: str) -> bool:
+    return bool(_BOILERPLATE_PARAGRAPH_RE.search(text))
+
+
 def parse_article_text(html: str) -> str:
-    """Best-effort extraction of article body text from a full HTML page."""
+    """Best-effort extraction of article body text from a full HTML page.
+
+    Strips scripts/styles/navigation and common ad/sponsorship/cookie chrome,
+    prefers an ``<article>``/``<main>`` container when present, and drops
+    paragraphs that are too short or look like boilerplate ("read more",
+    "subscribe", etc.). Never raises for malformed markup.
+    """
 
     if not html:
         return ""
@@ -152,16 +273,23 @@ def parse_article_text(html: str) -> str:
     except Exception as exc:  # pragma: no cover - BeautifulSoup is very tolerant
         raise YahooError(f"Could not parse article HTML: {exc}") from exc
 
-    for tag in soup(["script", "style", "noscript", "header", "footer", "nav", "aside"]):
+    for tag in soup(_BOILERPLATE_TAGS):
         tag.decompose()
 
-    container = soup.find("article") or soup
-    paragraphs = [
-        _WHITESPACE_RE.sub(" ", para.get_text(" ")).strip()
-        for para in container.find_all("p")
-    ]
-    body = "\n".join(para for para in paragraphs if len(para) > 40)
-    return body.strip()
+    for tag in soup.find_all(_is_boilerplate_element):
+        if tag is not None and hasattr(tag, "decompose"):
+            tag.decompose()
+
+    container = soup.find("article") or soup.find("main") or soup
+    paragraphs: List[str] = []
+    for para in container.find_all("p"):
+        text = _WHITESPACE_RE.sub(" ", para.get_text(" ")).strip()
+        if len(text) <= 40:
+            continue
+        if _is_boilerplate_paragraph(text):
+            continue
+        paragraphs.append(text)
+    return "\n".join(paragraphs).strip()
 
 
 def filter_recent(
@@ -216,6 +344,11 @@ class YahooFinanceClient:
             follow_redirects=True,
         )
         self._owns_client = http_client is None
+        # Per-run memo of article bodies (keyed by URL) plus the ETag observed
+        # for each so a repeat fetch can send If-None-Match and reuse the body
+        # on a 304.
+        self._body_cache: Dict[str, str] = {}
+        self._etags: Dict[str, str] = {}
 
     def close(self) -> None:
         if self._owns_client:
@@ -308,16 +441,46 @@ class YahooFinanceClient:
             logger.warning("Yahoo RSS payload for %s was unusable: %s", ticker, exc)
             return []
 
-    def fetch_article_text(self, article: NewsArticle) -> str:
-        """Fetch and extract the body of a single article, best-effort."""
+    def fetch_article_text(self, article: NewsArticle, *, refresh: bool = False) -> str:
+        """Fetch and extract the body of a single article, best-effort.
+
+        Bodies are memoized per URL for the life of this client (i.e. one
+        digest run), so a repeated call — a retry, or the same link seen under
+        two tickers — never refetches. Pass ``refresh=True`` to revalidate
+        instead: if an ETag was seen, the request is conditional and a ``304
+        Not Modified`` reuses the cached body.
+        """
+
+        url = article.link
+        if not url:
+            return ""
+        cached = self._body_cache.get(url)
+        if cached is not None and not refresh:
+            return cached
+
+        etag = self._etags.get(url)
+        headers = {"If-None-Match": etag} if (refresh and etag) else None
+        try:
+            response = self._client.get(url, headers=headers)
+        except httpx.HTTPError as exc:
+            logger.warning("Article fetch failed for %s: %s", url, exc)
+            return cached or ""
+
+        if response.status_code == 304:
+            return cached or ""
 
         try:
-            response = self._client.get(article.link)
             response.raise_for_status()
         except httpx.HTTPError as exc:
-            logger.warning("Article fetch failed for %s: %s", article.link, exc)
-            return ""
-        return parse_article_text(response.text)
+            logger.warning("Article fetch returned an error for %s: %s", url, exc)
+            return cached or ""
+
+        body = parse_article_text(response.text)
+        self._body_cache[url] = body
+        new_etag = response.headers.get("etag")
+        if new_etag:
+            self._etags[url] = new_etag.strip('"')
+        return body
 
     def enrich(self, articles: List[NewsArticle]) -> List[NewsArticle]:
         """Attach article body text to each item when configured, capped in length."""

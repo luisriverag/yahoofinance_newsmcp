@@ -40,11 +40,16 @@ class ArticleDigest:
 class CompanyDigest:
     ticker: str
     overall_summary: str
+    name: str = ""
     articles: List[ArticleDigest] = field(default_factory=list)
 
     @property
     def article_count(self) -> int:
         return len(self.articles)
+
+    @property
+    def display_name(self) -> str:
+        return self.name or self.ticker
 
 
 @dataclass(frozen=True)
@@ -74,6 +79,7 @@ def generate_digest(
     *,
     yahoo: Optional[YahooFinanceClient] = None,
     llm=None,
+    llm_overall=None,
     tickers: Optional[Sequence[str]] = None,
     now: Optional[datetime] = None,
 ) -> MorningDigest:
@@ -88,22 +94,37 @@ def generate_digest(
         from .llm import LlmClient
 
         llm = LlmClient(settings)
+        owns_llm = True
+    else:
+        owns_llm = False
     owns_yahoo = yahoo is None
     yahoo = yahoo or YahooFinanceClient(settings)
+    owns_overall = llm_overall is None
+    if llm_overall is None:
+        from .llm import LlmClient
+
+        overall_config = settings.overall_llm_config()
+        llm_overall = LlmClient(settings, **overall_config) if overall_config else llm
 
     now = now or datetime.now(timezone.utc)
     companies: List[CompanyDigest] = []
     try:
         for ticker in tickers:
             articles = yahoo.enrich(yahoo.fetch_news(ticker))
+            name = settings.company_name_for(ticker)
             if not articles:
                 companies.append(
-                    CompanyDigest(ticker=ticker, overall_summary="No recent news.", articles=[])
+                    CompanyDigest(
+                        ticker=ticker,
+                        overall_summary="No recent news.",
+                        name=name,
+                        articles=[],
+                    )
                 )
                 continue
 
-            summaries = summarize_articles(llm, ticker, articles)
-            company_summary = summarize_company(llm, ticker, articles)
+            summaries = summarize_articles(llm, ticker, articles, name)
+            company_summary = summarize_company(llm, ticker, articles, name)
             article_digests = [
                 _article_digest(article, summaries[index] if index < len(summaries) else "")
                 for index, article in enumerate(articles)
@@ -112,14 +133,21 @@ def generate_digest(
                 CompanyDigest(
                     ticker=ticker,
                     overall_summary=company_summary,
+                    name=name,
                     articles=article_digests,
                 )
             )
 
         overall = summarize_overall(
-            llm, [(company.ticker, company.overall_summary) for company in companies]
+            llm_overall,
+            [(company.ticker, company.overall_summary) for company in companies],
+            settings.digest_tone,
         )
     finally:
+        if owns_overall and llm_overall is not None and llm_overall is not llm:
+            llm_overall.close()
+        if owns_llm:
+            llm.close()
         if owns_yahoo:
             yahoo.close()
 
@@ -161,7 +189,10 @@ def render_markdown(digest: MorningDigest) -> str:
     ]
 
     for company in digest.companies:
-        lines.append(f"## {company.ticker} ({company.article_count} article(s))")
+        heading = company.ticker
+        if company.name and company.name.upper() != company.ticker.upper():
+            heading = f"{company.ticker} — {company.name}"
+        lines.append(f"## {heading} ({company.article_count} article(s))")
         lines.append("")
         lines.append(company.overall_summary or "No summary available.")
         lines.append("")
@@ -227,6 +258,7 @@ def _digest_from_dict(data: dict) -> MorningDigest:
         CompanyDigest(
             ticker=company.get("ticker", ""),
             overall_summary=company.get("overall_summary", ""),
+            name=company.get("name", ""),
             articles=[
                 ArticleDigest(
                     title=article.get("title", ""),
