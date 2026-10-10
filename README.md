@@ -70,8 +70,10 @@ This server is designed to be wired into [ocabra_telegram](https://github.com/lu
 ```env
 # In ocabra_telegram's .env
 YF_MCP_HTTP_PORT=3654
-MCP_YAHOO_NEWS_URL=http://<host>:3654/mcp
-MCP_YAHOO_NEWS_AUTH_TOKEN=<same value as YF_MCP_AUTH_TOKEN>
+YAHOO_NEWS_MCP_ENABLED=true
+YAHOO_NEWS_MCP_URL=http://<host>:3654/mcp
+YAHOO_NEWS_MCP_AUTH_TOKEN=<same value as YF_MCP_AUTH_TOKEN>
+YAHOO_NEWS_ADMIN_TELEGRAM_ID=<your Telegram user id>
 ```
 
 For a same-host stdio install (no HTTP service), set `YF_MCP_TRANSPORT=stdio` here and configure ocabra_telegram's generic stdio backend:
