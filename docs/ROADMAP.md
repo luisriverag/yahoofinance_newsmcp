@@ -10,6 +10,7 @@
 - [x] Support multiple LLM backends (separate summarization vs. optional tone/style) with per-call timeouts.
 - [x] Add a "dry run" mode that only fetches headlines without calling the LLM (fast smoke test).
 - [x] Cache article bodies per run to avoid re-fetching on retries; add simple ETag support.
+- [x] Persist the article-body and summary caches to disk (CACHE_DIR/CACHE_TTL_HOURS) so a repeat call across separate runs, not just within one, skips re-fetching and re-summarizing unchanged articles -- the summarization model call is the dominant cost of a digest run.
 - [ ] Expose digest format presets (concise vs. detailed) via config/CLI.
 - [x] Add health check probe against Telegram Bot API (`getMe`) when delivery is configured.
 - [ ] Consider a small TUI (inspired by torrent_mcp's `tui.py`) to preview the digest before sending.

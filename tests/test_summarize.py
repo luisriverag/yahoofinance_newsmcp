@@ -1,8 +1,11 @@
+from yahoofinance_newsmcp.cache import JsonCache
 from yahoofinance_newsmcp.summarize import (
     build_article_prompt,
     build_company_prompt,
     build_overall_prompt,
     parse_article_summaries,
+    summarize_articles,
+    summarize_company,
 )
 from yahoofinance_newsmcp.yahoo import NewsArticle
 
@@ -66,3 +69,85 @@ def test_parse_article_summaries_line_fallback():
 
 def test_parse_article_summaries_bullet_fallback():
     assert parse_article_summaries("- bullet summary", expected=1) == ["bullet summary"]
+
+
+class _RecordingLLM:
+    def __init__(self, reply="reply"):
+        self.reply = reply
+        self.calls = 0
+
+    def chat(self, messages):
+        self.calls += 1
+        return self.reply
+
+
+def test_summarize_articles_without_cache_always_calls_llm():
+    llm = _RecordingLLM('["s1", "s2"]')
+    articles = [_article("first"), _article("second")]
+
+    first = summarize_articles(llm, "AAPL", articles)
+    second = summarize_articles(llm, "AAPL", articles)
+
+    assert first == ["s1", "s2"]
+    assert second == ["s1", "s2"]
+    assert llm.calls == 2
+
+
+def test_summarize_articles_with_cache_skips_llm_on_repeat_call(tmp_path):
+    cache = JsonCache(str(tmp_path / "s.json"), ttl_seconds=3600)
+    llm = _RecordingLLM('["s1", "s2"]')
+    articles = [_article("first"), _article("second")]
+
+    first = summarize_articles(llm, "AAPL", articles, cache=cache)
+    second = summarize_articles(llm, "AAPL", articles, cache=cache)
+
+    assert first == second == ["s1", "s2"]
+    assert llm.calls == 1
+
+
+def test_summarize_articles_with_cache_only_summarizes_the_uncached_article(tmp_path):
+    cache = JsonCache(str(tmp_path / "s.json"), ttl_seconds=3600)
+    first_llm = _RecordingLLM('["s1"]')
+    summarize_articles(first_llm, "AAPL", [_article("first")], cache=cache)
+
+    second_llm = _RecordingLLM('["s2"]')
+    result = summarize_articles(
+        second_llm, "AAPL", [_article("first"), _article("second")], cache=cache
+    )
+
+    assert result == ["s1", "s2"]
+    assert second_llm.calls == 1
+
+
+def test_summarize_articles_cache_misses_when_body_changes(tmp_path):
+    cache = JsonCache(str(tmp_path / "s.json"), ttl_seconds=3600)
+    llm = _RecordingLLM('["s1"]')
+    original = NewsArticle(ticker="AAPL", title="t", link="https://a/1", body="original body")
+    summarize_articles(llm, "AAPL", [original], cache=cache)
+
+    changed = NewsArticle(ticker="AAPL", title="t", link="https://a/1", body="updated body")
+    summarize_articles(llm, "AAPL", [changed], cache=cache)
+
+    assert llm.calls == 2
+
+
+def test_summarize_company_with_cache_skips_llm_on_repeat_call(tmp_path):
+    cache = JsonCache(str(tmp_path / "s.json"), ttl_seconds=3600)
+    llm = _RecordingLLM("Company paragraph.")
+    articles = [_article("first"), _article("second")]
+
+    first = summarize_company(llm, "AAPL", articles, cache=cache)
+    second = summarize_company(llm, "AAPL", articles, cache=cache)
+
+    assert first == second == "Company paragraph."
+    assert llm.calls == 1
+
+
+def test_summarize_company_cache_misses_when_article_set_changes(tmp_path):
+    cache = JsonCache(str(tmp_path / "s.json"), ttl_seconds=3600)
+    llm = _RecordingLLM("Company paragraph.")
+
+    summarize_company(llm, "AAPL", [_article("first")], cache=cache)
+    summarize_company(llm, "AAPL", [_article("first"), _article("second")], cache=cache)
+
+    assert llm.calls == 2

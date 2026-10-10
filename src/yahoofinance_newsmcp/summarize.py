@@ -14,8 +14,10 @@ Prompt *building* and response *parsing* are pure functions; only the
 
 from __future__ import annotations
 
-from typing import Dict, List, Sequence
+import hashlib
+from typing import Dict, List, Optional, Sequence
 
+from .cache import JsonCache, article_fingerprint
 from .llm import LlmClient, parse_json_block
 from .yahoo import NewsArticle
 
@@ -123,14 +125,42 @@ def _split_summary_lines(text: str) -> List[str]:
 
 
 def summarize_articles(
-    llm: LlmClient, ticker: str, articles: Sequence[NewsArticle], company_name: str = ""
+    llm: LlmClient,
+    ticker: str,
+    articles: Sequence[NewsArticle],
+    company_name: str = "",
+    cache: Optional[JsonCache] = None,
 ) -> List[str]:
-    """Summarize every article for one ticker; one LLM call, ordered output."""
+    """Summarize every article for one ticker; one LLM call per *uncached*
+    article (same call shape as before when nothing is cached). A cache hit
+    is keyed on the article's link/title/body, so a changed or newly-fetched
+    body is summarized fresh rather than served a stale cached summary.
+    """
 
     if not articles:
         return []
-    response = llm.chat(build_article_prompt(ticker, articles, company_name))
-    return parse_article_summaries(response, expected=len(articles))
+    if cache is None:
+        response = llm.chat(build_article_prompt(ticker, articles, company_name))
+        return parse_article_summaries(response, expected=len(articles))
+
+    fingerprints = [article_fingerprint(article) for article in articles]
+    summaries: List[Optional[str]] = []
+    missing_indices: List[int] = []
+    for index, fingerprint in enumerate(fingerprints):
+        entry = cache.get(f"article:{ticker}:{fingerprint}")
+        summaries.append(entry.get("summary", "") if entry is not None else None)
+        if entry is None:
+            missing_indices.append(index)
+
+    if missing_indices:
+        missing_articles = [articles[index] for index in missing_indices]
+        response = llm.chat(build_article_prompt(ticker, missing_articles, company_name))
+        fresh = parse_article_summaries(response, expected=len(missing_articles))
+        for index, summary in zip(missing_indices, fresh):
+            summaries[index] = summary
+            cache.set(f"article:{ticker}:{fingerprints[index]}", {"summary": summary})
+
+    return [summary or "" for summary in summaries]
 
 
 def build_company_prompt(
@@ -151,12 +181,34 @@ def build_company_prompt(
     ]
 
 
+def _company_fingerprint(articles: Sequence[NewsArticle]) -> str:
+    """Identity for one ticker's exact article set -- changes (a new article
+    appeared, or one's fetched body changed) naturally miss the cache."""
+
+    combined = "|".join(sorted(article_fingerprint(article) for article in articles))
+    return hashlib.sha256(combined.encode("utf-8")).hexdigest()[:16]
+
+
 def summarize_company(
-    llm: LlmClient, ticker: str, articles: Sequence[NewsArticle], company_name: str = ""
+    llm: LlmClient,
+    ticker: str,
+    articles: Sequence[NewsArticle],
+    company_name: str = "",
+    cache: Optional[JsonCache] = None,
 ) -> str:
     if not articles:
         return "No recent news."
-    return llm.chat(build_company_prompt(ticker, articles, company_name)).strip()
+    if cache is None:
+        return llm.chat(build_company_prompt(ticker, articles, company_name)).strip()
+
+    key = f"company:{ticker}:{_company_fingerprint(articles)}"
+    entry = cache.get(key)
+    if entry is not None:
+        return entry.get("summary", "")
+
+    summary = llm.chat(build_company_prompt(ticker, articles, company_name)).strip()
+    cache.set(key, {"summary": summary})
+    return summary
 
 
 def build_overall_prompt(

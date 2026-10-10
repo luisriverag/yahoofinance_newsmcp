@@ -23,6 +23,7 @@ from starlette.responses import JSONResponse
 from starlette.types import ASGIApp, Receive, Scope, Send
 
 from . import health, redaction
+from .cache import build_cache
 from .config import Settings, configure_logging, get_settings
 from .digest import DigestError, load_latest, render_markdown
 from .llm import LlmClient, LlmError
@@ -135,8 +136,10 @@ def summarize_ticker(ticker: str, limit: Optional[int] = None) -> dict:
         }
 
     with LlmClient(settings) as llm:
-        summaries = summarize_articles(llm, ticker, articles, name)
-        overall = summarize_company(llm, ticker, articles, name)
+        summary_cache = build_cache(settings, "summaries")
+        summaries = summarize_articles(llm, ticker, articles, name, summary_cache)
+        overall = summarize_company(llm, ticker, articles, name, summary_cache)
+        summary_cache.save()
 
     return {
         "ticker": ticker.upper(),

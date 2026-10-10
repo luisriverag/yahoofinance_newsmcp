@@ -306,3 +306,52 @@ class TestClient:
             good = client.fetch_article_text(article)
             state["fail"] = True
             assert client.fetch_article_text(article, refresh=True) == good
+
+    def test_fetch_article_text_persists_body_across_client_instances(self, tmp_path):
+        settings = Settings(cache_dir=str(tmp_path), cache_ttl_hours=1)
+        calls = {"n": 0}
+
+        def handler(request):
+            calls["n"] += 1
+            return httpx.Response(
+                200,
+                text="<html><body><article><p>Persisted body text that is long enough to be kept here.</p></article></body></html>",
+            )
+
+        article = _article("t", NOW)
+        with httpx.Client(transport=httpx.MockTransport(handler)) as http:
+            first_client = YahooFinanceClient(settings, http_client=http)
+            first = first_client.fetch_article_text(article)
+            first_client.close()
+
+        # A fresh client instance (as a separate process/run would construct)
+        # reuses the persisted body instead of hitting the network again.
+        with httpx.Client(transport=httpx.MockTransport(handler)) as http:
+            second_client = YahooFinanceClient(settings, http_client=http)
+            second = second_client.fetch_article_text(article)
+
+        assert second == first
+        assert calls["n"] == 1
+
+    def test_fetch_article_text_refresh_bypasses_persisted_body(self, tmp_path):
+        settings = Settings(cache_dir=str(tmp_path), cache_ttl_hours=1)
+        calls = {"n": 0}
+
+        def handler(request):
+            calls["n"] += 1
+            return httpx.Response(
+                200,
+                text="<html><body><article><p>Fresh body text that is long enough to be kept here.</p></article></body></html>",
+            )
+
+        article = _article("t", NOW)
+        with httpx.Client(transport=httpx.MockTransport(handler)) as http:
+            first_client = YahooFinanceClient(settings, http_client=http)
+            first_client.fetch_article_text(article)
+            first_client.close()
+
+        with httpx.Client(transport=httpx.MockTransport(handler)) as http:
+            second_client = YahooFinanceClient(settings, http_client=http)
+            second_client.fetch_article_text(article, refresh=True)
+
+        assert calls["n"] == 2
